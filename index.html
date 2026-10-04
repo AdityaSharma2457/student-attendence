@@ -448,7 +448,47 @@
     text-decoration: none;
   }
 
-  .hidden { display: none; }
+  .hidden { display: none !important; }
+
+  body:not(.teacher):not(.student) #appHeader { display: none; }
+  .app-view { display: none; }
+  body.teacher #teacherView, body.student #studentView { display: block; }
+  #authView { max-width: 680px; margin: 7vh auto 0; }
+  .auth-heading { margin-bottom: 22px; }
+  .auth-heading h2 { margin: 0 0 6px; font-size: 1.8rem; }
+  .auth-heading p { margin: 0; color: var(--muted); }
+  .auth-fields { display: grid; gap: 14px; }
+  .auth-fields label, .field-label { display: grid; gap: 6px; font-weight: 600; }
+  .auth-fields input:not([type="radio"]), .auth-fields select {
+    width: 100%; min-width: 0; padding: 12px 14px; border: 1px solid var(--line);
+    border-radius: 10px; background: white; color: var(--text); font: inherit;
+  }
+  .role-options, .department-options { display: flex; gap: 12px; flex-wrap: wrap; }
+  .role-options label, .department-options label {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    border: 1px solid var(--line); border-radius: 10px; background: white; cursor: pointer;
+  }
+  .mode-switch { display: flex; gap: 18px; margin: 22px 0; border-bottom: 1px solid var(--line); }
+  .mode-switch button { padding: 10px 2px; border-radius: 0; background: transparent; color: var(--muted); box-shadow: none; }
+  .mode-switch button.active { color: var(--primary); border-bottom: 2px solid var(--primary); }
+  .camera-box { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(150px, 0.6fr); gap: 14px; align-items: start; }
+  .camera-box video { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 10px; background: #202a34; }
+  .angle-list { display: grid; gap: 8px; }
+  .angle-list button { padding: 9px 10px; }
+  .angle-list button.captured { background: #16866f; }
+  #studentView { max-width: 900px; margin: 0 auto; }
+  .account-bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
+  .account-bar h2 { margin: 0; }
+  #attendanceTable td:last-child { font-weight: 700; }
+  #attendanceTable .present { color: #0c8d72; }
+  #attendanceTable .absent { color: var(--danger); }
+  .sheet-settings { margin-bottom: 22px; }
+  .sheet-settings input { flex: 1 1 280px; min-width: 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px; font: inherit; }
+  .sheet-settings .row label { display: grid; gap: 5px; color: var(--muted); font-size: 0.82rem; }
+  .sheet-connection-list { display: grid; gap: 8px; margin-top: 12px; }
+  .sheet-connection { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,0.55); }
+  .sheet-connection span { min-width: 0; overflow-wrap: anywhere; }
+  select { max-width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: white; color: var(--text); font: inherit; }
 
   @media (max-width: 820px) {
     .topbar,
@@ -470,12 +510,17 @@
     input[type="text"] {
       width: 100%;
     }
+
+    #authView { margin-top: 3vh; }
+    .camera-box { grid-template-columns: 1fr; }
+    .angle-list { grid-template-columns: repeat(3, 1fr); }
+    .account-bar { align-items: flex-start; }
   }
 </style>
 </head>
 <body>
   <div class="page-shell">
-    <header class="topbar">
+    <header class="topbar" id="appHeader">
       <div class="brand">
         <div class="brand-mark">S</div>
         <div>
@@ -486,6 +531,85 @@
       <div class="status-pill">AI-powered • Google Sheets</div>
     </header>
 
+    <section class="card" id="authView">
+      <div class="auth-heading">
+        <span class="eyebrow">Smart attendance</span>
+        <h2 id="authTitle">Sign in</h2>
+        <p>Use your institution account to continue.</p>
+      </div>
+      <div class="role-options" role="radiogroup" aria-label="Account type">
+        <label><input type="radio" name="role" value="student" checked> Student</label>
+        <label><input type="radio" name="role" value="teacher"> Teacher</label>
+      </div>
+      <div class="mode-switch">
+        <button type="button" class="active" id="loginMode">Sign in</button>
+        <button type="button" id="createMode">Create account</button>
+      </div>
+      <form id="loginForm" class="auth-fields">
+        <label id="loginIdWrap" class="hidden">Teacher ID<input id="loginId" autocomplete="username"></label>
+        <label>Email<input id="loginEmail" type="email" autocomplete="email" required></label>
+        <label>Password<input id="loginPassword" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Sign in</button>
+      </form>
+      <form id="registerForm" class="auth-fields hidden">
+        <label id="registerIdLabel">Student ID<input id="registerId" required></label>
+        <label>Email<input id="registerEmail" type="email" autocomplete="email" required></label>
+        <label>Password<input id="registerPassword" type="password" minlength="8" autocomplete="new-password" required></label>
+        <div id="departmentWrap">
+          <span class="field-label">Department</span>
+          <div class="department-options">
+            <label><input type="radio" name="department" value="CSE" checked> CSE</label>
+            <label><input type="radio" name="department" value="AI/ML"> AI/ML</label>
+          </div>
+        </div>
+        <div id="cameraWrap">
+          <span class="field-label">Face enrollment</span>
+          <p class="muted">Capture one clear image facing forward, then one from each side. Only face embeddings are stored.</p>
+          <div class="camera-box">
+            <video id="camera" autoplay playsinline muted></video>
+            <div class="angle-list">
+              <button type="button" id="startCamera">Start camera</button>
+              <button type="button" data-angle="Front">Capture front</button>
+              <button type="button" data-angle="Left">Capture left</button>
+              <button type="button" data-angle="Right">Capture right</button>
+            </div>
+          </div>
+          <div id="captureStatus" class="msg">0 of 3 angles captured</div>
+        </div>
+        <button type="submit">Create account</button>
+      </form>
+      <div id="authMsg" class="msg" aria-live="polite"></div>
+    </section>
+
+    <main id="studentView" class="app-view">
+      <div class="account-bar">
+        <div><span class="eyebrow">Student portal</span><h2 id="studentHeading"></h2><span class="muted" id="studentDepartment"></span></div>
+        <button type="button" class="ghost" id="studentLogout">Sign out</button>
+      </div>
+      <section class="card">
+        <div class="card-header"><h2>My attendance</h2><button type="button" id="refreshAttendance">Refresh</button></div>
+        <p class="muted">Attendance is read directly from the Google Sheet.</p>
+        <div id="attendanceMsg" class="msg"></div>
+        <table id="attendanceTable"></table>
+      </section>
+    </main>
+
+    <div id="teacherView" class="app-view">
+      <div class="account-bar">
+        <div><span class="eyebrow">Teacher workspace</span><h2 id="teacherHeading"></h2></div>
+        <button type="button" class="ghost" id="teacherLogout">Sign out</button>
+      </div>
+      <section class="card sheet-settings">
+        <div class="card-header"><h2>Google Sheets connection</h2></div>
+        <p class="muted">Connect a separate spreadsheet for each class you teach.</p>
+        <form id="sheetSettingsForm" class="row">
+          <label>Class name<input id="teacherClassName" type="text" maxlength="100" placeholder="e.g. CSE Year 2" required></label>
+          <label>Google Sheets ID<input id="teacherSheetId" type="text" autocomplete="off" maxlength="200" placeholder="Paste this class's Google Sheets ID" required></label>
+          <button type="submit">Add or update class</button>
+        </form>
+        <div id="sheetSettingsMsg" class="msg" aria-live="polite"></div>
+        <div id="teacherSheetList" class="sheet-connection-list"></div>
+      </section>
     <section class="hero">
       <div class="hero-copy">
         <span class="badge">Face recognition attendance</span>
@@ -563,6 +687,7 @@
           <div id="faceCount"></div>
           <div class="meta" id="meta"></div>
           <div class="row">
+            <label><b>Class sheet</b> <select id="sheetTarget" required></select></label>
             <label><b>Sheet column</b> <input type="text" id="column" size="20"></label>
             <span class="muted">Auto-filled from the photo metadata. Edit if needed.</span>
           </div>
@@ -575,34 +700,220 @@
         </div>
       </section>
     </main>
+    </div>
   </div>
 
 <script>
 const $ = s => document.querySelector(s);
 const say = (el, text, cls) => { el.textContent = text; el.className = 'msg ' + (cls || ''); };
+const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+let cameraStream = null;
+let teacherSheets = [];
+const captured = {};
+
 async function api(url, opts) {
   const r = await fetch(url, opts), j = await r.json();
   if (!r.ok) throw new Error(j.error || 'Request failed');
   return j;
 }
 
-async function loadStudents() {
-  const list = await api('/api/students');
-  const box = $('#studentList');
-  const count = document.getElementById('studentCount');
-  if (count) count.textContent = String(list.length);
-  box.innerHTML = list.length ? '' : '<p class="muted">No students enrolled yet.</p>';
-  list.forEach(s => {
-    const row = document.createElement('div');
-    row.className = 'student-tag';
-    row.innerHTML = `<span>${s.name}</span><span class="meta-text">(${s.photos} photos)</span>`;
-    const del = document.createElement('button');
-    del.className = 'ghost'; del.textContent = 'Remove';
-    del.onclick = async () => { await api('/api/students/' + encodeURIComponent(s.name), { method: 'DELETE' }); loadStudents(); };
-    row.appendChild(del);
-    box.appendChild(row);
-  });
+function selectedRole() { return $('input[name="role"]:checked').value; }
+
+function stopCamera() {
+  if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
+  cameraStream = null;
+  $('#camera').srcObject = null;
 }
+
+function updateRole() {
+  const teacher = selectedRole() === 'teacher';
+  $('#loginIdWrap').classList.toggle('hidden', !teacher);
+  $('#loginId').required = teacher;
+  $('#registerIdLabel').firstChild.textContent = teacher ? 'Teacher ID' : 'Student ID';
+  $('#departmentWrap').classList.toggle('hidden', teacher);
+  $('#cameraWrap').classList.toggle('hidden', teacher);
+  if (teacher) stopCamera();
+  say($('#authMsg'), '');
+}
+
+function setMode(create) {
+  $('#loginForm').classList.toggle('hidden', create);
+  $('#registerForm').classList.toggle('hidden', !create);
+  $('#loginMode').classList.toggle('active', !create);
+  $('#createMode').classList.toggle('active', create);
+  $('#authTitle').textContent = create ? 'Create account' : 'Sign in';
+  if (!create) stopCamera();
+  say($('#authMsg'), '');
+}
+
+document.querySelectorAll('input[name="role"]').forEach(input => input.addEventListener('change', updateRole));
+$('#loginMode').onclick = () => setMode(false);
+$('#createMode').onclick = () => setMode(true);
+
+$('#startCamera').onclick = async () => {
+  try {
+    stopCamera();
+    cameraStream = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'user'}, audio: false});
+    $('#camera').srcObject = cameraStream;
+    say($('#captureStatus'), `${Object.keys(captured).length} of 3 angles captured`);
+  } catch (error) {
+    say($('#authMsg'), 'Camera access is unavailable. Allow camera access and use localhost or HTTPS.', 'err');
+  }
+};
+
+document.querySelectorAll('[data-angle]').forEach(button => button.onclick = () => {
+  const video = $('#camera');
+  if (!cameraStream || video.readyState < 2) return say($('#captureStatus'), 'Start the camera before capturing.', 'err');
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  canvas.toBlob(blob => {
+    if (!blob) return say($('#captureStatus'), 'Could not capture an image. Try again.', 'err');
+    const angle = button.dataset.angle;
+    captured[angle] = new File([blob], `${angle.toLowerCase()}.jpg`, {type: 'image/jpeg'});
+    button.classList.add('captured');
+    button.textContent = `Recapture ${angle.toLowerCase()}`;
+    say($('#captureStatus'), `${Object.keys(captured).length} of 3 angles captured`, 'ok');
+  }, 'image/jpeg', 0.92);
+});
+
+$('#loginForm').onsubmit = async event => {
+  event.preventDefault();
+  const body = {role: selectedRole(), email: $('#loginEmail').value, password: $('#loginPassword').value,
+    account_id: $('#loginId').value};
+  try { enterApp(await api('/api/login', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})); }
+  catch (error) { say($('#authMsg'), error.message, 'err'); }
+};
+
+$('#registerForm').onsubmit = async event => {
+  event.preventDefault();
+  const role = selectedRole();
+  if (role === 'student' && ['Front', 'Left', 'Right'].some(angle => !captured[angle]))
+    return say($('#authMsg'), 'Capture front, left, and right images before creating the student account.', 'err');
+  const form = new FormData();
+  form.append('role', role); form.append('account_id', $('#registerId').value.trim());
+  form.append('email', $('#registerEmail').value.trim()); form.append('password', $('#registerPassword').value);
+  if (role === 'student') {
+    form.append('department', $('input[name="department"]:checked').value);
+    ['Front', 'Left', 'Right'].forEach(angle => form.append('photos', captured[angle], captured[angle].name));
+  }
+  try {
+    await api('/api/register', {method: 'POST', body: form});
+    const account = await api('/api/login', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({role, account_id: $('#registerId').value.trim(), email: $('#registerEmail').value.trim(), password: $('#registerPassword').value})});
+    stopCamera(); enterApp(account);
+  } catch (error) { say($('#authMsg'), error.message, 'err'); }
+};
+
+function enterApp(account) {
+  document.body.classList.remove('student', 'teacher');
+  document.body.classList.add(account.role);
+  $('#authView').classList.add('hidden');
+  $('#appHeader').classList.remove('hidden');
+  if (account.role === 'teacher') {
+    $('#teacherHeading').textContent = `Teacher ID: ${account.account_id}`;
+    loadTeacherSheets();
+    loadStudents();
+  } else {
+    $('#studentHeading').textContent = `Student ID: ${account.account_id}`;
+    $('#studentDepartment').textContent = `Department: ${account.department}`;
+    loadAttendance();
+  }
+}
+
+async function signOut() {
+  await api('/api/logout', {method: 'POST'});
+  stopCamera();
+  document.body.classList.remove('student', 'teacher');
+  $('#authView').classList.remove('hidden'); $('#appHeader').classList.add('hidden');
+  setMode(false); $('#loginPassword').value = '';
+}
+
+$('#teacherLogout').onclick = signOut;
+$('#studentLogout').onclick = signOut;
+
+async function loadTeacherSheets() {
+  try {
+    const result = await api('/api/teacher/sheets');
+    teacherSheets = result.sheets;
+    const select = $('#sheetTarget');
+    const selected = select.value;
+    select.innerHTML = teacherSheets.length
+      ? teacherSheets.map(sheet => `<option value="${sheet.id}">${escapeHtml(sheet.class_name)}</option>`).join('')
+      : '<option value="">Add a class sheet first</option>';
+    if (teacherSheets.some(sheet => String(sheet.id) === selected)) select.value = selected;
+
+    const list = $('#teacherSheetList');
+    list.innerHTML = '';
+    teacherSheets.forEach(sheet => {
+      const row = document.createElement('div'); row.className = 'sheet-connection';
+      const label = document.createElement('span');
+      label.textContent = `${sheet.class_name} · ${sheet.sheet_id}`;
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'ghost'; remove.textContent = 'Remove';
+      remove.onclick = async () => {
+        try { await api(`/api/teacher/sheets/${sheet.id}`, {method: 'DELETE'}); await loadTeacherSheets(); }
+        catch (error) { say($('#sheetSettingsMsg'), error.message, 'err'); }
+      };
+      row.append(label, remove); list.appendChild(row);
+    });
+    say($('#sheetSettingsMsg'), teacherSheets.length
+      ? `${teacherSheets.length} class sheet${teacherSheets.length === 1 ? '' : 's'} connected.`
+      : 'Add a class and its Google Sheets ID before saving attendance.', teacherSheets.length ? 'ok' : '');
+  } catch (error) { say($('#sheetSettingsMsg'), error.message, 'err'); }
+}
+
+$('#sheetSettingsForm').onsubmit = async event => {
+  event.preventDefault();
+  const className = $('#teacherClassName').value.trim();
+  const sheetId = $('#teacherSheetId').value.trim();
+  if (!className || !sheetId) return say($('#sheetSettingsMsg'), 'Enter a class name and Google Sheets ID.', 'err');
+  const button = $('#sheetSettingsForm button');
+  button.disabled = true; say($('#sheetSettingsMsg'), 'Saving...');
+  try {
+    await api('/api/teacher/sheets', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({class_name: className, sheet_id: sheetId})});
+    $('#teacherClassName').value = ''; $('#teacherSheetId').value = '';
+    await loadTeacherSheets();
+  } catch (error) { say($('#sheetSettingsMsg'), error.message, 'err'); }
+  button.disabled = false;
+};
+
+async function loadStudents() {
+  try {
+    const list = await api('/api/students');
+    $('#studentCount').textContent = String(list.length);
+    const box = $('#studentList'); box.innerHTML = '';
+    if (!list.length) box.innerHTML = '<p class="muted">No students enrolled yet.</p>';
+    list.forEach(student => {
+      const row = document.createElement('div'); row.className = 'student-tag';
+      row.innerHTML = `<span>${escapeHtml(student.name)}</span><span class="meta-text">(${student.photos} photos)</span>`;
+      const del = document.createElement('button'); del.className = 'ghost'; del.textContent = 'Remove';
+      del.onclick = async () => { try { await api('/api/students/' + encodeURIComponent(student.name), {method: 'DELETE'}); loadStudents(); }
+        catch (error) { say($('#enrollMsg'), error.message, 'err'); } };
+      row.appendChild(del); box.appendChild(row);
+    });
+  } catch (error) { say($('#enrollMsg'), error.message, 'err'); }
+}
+
+async function loadAttendance() {
+  say($('#attendanceMsg'), 'Loading attendance...');
+  try {
+    const result = await api('/api/student/attendance');
+    const table = $('#attendanceTable');
+    if (!result.attendance.length) {
+      table.innerHTML = '';
+      return say($('#attendanceMsg'), 'No attendance entries found for this student ID in the Google Sheet.');
+    }
+    table.innerHTML = '<tr><th>Date / session</th><th>Class</th><th>Teacher</th><th>Status</th></tr>' + result.attendance.map(item => {
+      const status = escapeHtml(item.status || 'Not recorded');
+      const klass = item.status === 'Present' ? 'present' : item.status === 'Absent' ? 'absent' : '';
+      return `<tr><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.class_name)}</td><td>${escapeHtml(item.teacher_id)}</td><td class="${klass}">${status}</td></tr>`;
+    }).join('');
+    say($('#attendanceMsg'), `${result.attendance.length} sheet entries loaded.`, 'ok');
+  } catch (error) { say($('#attendanceMsg'), error.message, 'err'); }
+}
+
+$('#refreshAttendance').onclick = loadAttendance;
 
 $('#enrollBtn').onclick = async () => {
   const name = $('#name').value.trim(), files = $('#photos').files;
@@ -634,29 +945,38 @@ $('#runBtn').onclick = async () => {
     const m = r.metadata;
     $('#meta').innerHTML = [['Taken at', m.taken_at], ['Source', m.source], ['Camera', m.camera || 'unknown'],
       ['Resolution', m.width ? `${m.width} x ${m.height}` : 'unknown']]
-      .map(([k, v]) => `<div><b>${k}</b>${v}</div>`).join('');
+      .map(([k, v]) => `<div><b>${escapeHtml(k)}</b>${escapeHtml(v)}</div>`).join('');
     $('#column').value = r.column;
     $('#table').innerHTML = '<tr><th>Student</th><th>Present</th></tr>' + r.students.map(s =>
-      `<tr><td>${s.name}</td><td><input type="checkbox" data-name="${s.name}" ${s.present ? 'checked' : ''}></td></tr>`).join('');
+      `<tr><td>${escapeHtml(s.name)}</td><td><input type="checkbox" data-name="${escapeHtml(s.name)}" ${s.present ? 'checked' : ''}></td></tr>`).join('');
     $('#result').classList.remove('hidden'); say($('#saveMsg'), '');
   } catch (e) { say($('#runMsg'), e.message, 'err'); }
   $('#runBtn').disabled = false;
 };
 
 $('#saveBtn').onclick = async () => {
+  if (!$('#sheetTarget').value) return say($('#saveMsg'), 'Connect and select a class sheet before saving.', 'err');
   const attendance = {};
   document.querySelectorAll('#table input[type=checkbox]').forEach(c => attendance[c.dataset.name] = c.checked);
   $('#saveBtn').disabled = true; say($('#saveMsg'), 'Saving...');
   try {
     const r = await api('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ column: $('#column').value, attendance }) });
+      body: JSON.stringify({ column: $('#column').value, attendance, sheet_target: Number($('#sheetTarget').value) }) });
     say($('#saveMsg'), `Saved to column "${$('#column').value}".`, 'ok');
     $('#sheetLink').href = r.url; $('#sheetLink').classList.remove('hidden');
   } catch (e) { say($('#saveMsg'), e.message, 'err'); }
   $('#saveBtn').disabled = false;
 };
 
-loadStudents();
+async function restoreSession() {
+  updateRole();
+  try {
+    const result = await api('/api/me');
+    if (result.account) enterApp(result.account);
+  } catch (_) {}
+}
+
+restoreSession();
 </script>
 </body>
 </html>

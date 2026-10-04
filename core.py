@@ -60,6 +60,17 @@ def enroll(name, images):
     return added, len(images) - added
 
 
+def extract_embeddings(images):
+    """Return face embeddings for the largest face in each image."""
+    embeddings = []
+    for img in images:
+        faces = detect_faces(img)
+        if faces:
+            face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+            embeddings.append(face.normed_embedding)
+    return embeddings, len(images) - len(embeddings)
+
+
 def recognize(img, db, threshold=0.4):
     """Returns (faces, matches) with matches = {face_index: (name, score)}.
     One-to-one assignment: a student can't be matched to two faces."""
