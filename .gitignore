@@ -1,0 +1,5 @@
+venv/
+.venv/
+__pycache__/
+credentials.json
+embeddings.pkl

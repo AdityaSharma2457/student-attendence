@@ -1,0 +1,8 @@
+insightface
+onnxruntime
+opencv-python
+numpy
+scipy
+Pillow
+flask
+gspread
