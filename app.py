@@ -5,14 +5,17 @@
 
 import base64
 import cv2
+import io
 import os
 import secrets
 import sqlite3
 from contextlib import contextmanager
 from functools import wraps
 from flask import Flask, jsonify, request, send_file, session
+from openpyxl import Workbook
 from werkzeug.security import check_password_hash, generate_password_hash
-import core, sheets
+from werkzeug.utils import secure_filename
+import core
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY") or secrets.token_hex(32)
@@ -47,26 +50,35 @@ def init_accounts():
             email TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
             department TEXT,
-            sheet_id TEXT,
             UNIQUE (role, account_id)
         )""")
-        columns = {row[1] for row in db.execute("PRAGMA table_info(accounts)")}
-        if "sheet_id" not in columns:
-            db.execute("ALTER TABLE accounts ADD COLUMN sheet_id TEXT")
-        sheets_table_exists = db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'teacher_sheets'"
-        ).fetchone()
-        db.execute("""CREATE TABLE IF NOT EXISTS teacher_sheets (
+        db.execute("""CREATE TABLE IF NOT EXISTS teacher_classes (
             id INTEGER PRIMARY KEY,
-            teacher_account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            teacher_account_id INTEGER NOT NULL,
             class_name TEXT NOT NULL,
-            sheet_id TEXT NOT NULL,
             UNIQUE (teacher_account_id, class_name)
         )""")
-        if not sheets_table_exists:
-            db.execute("""INSERT OR IGNORE INTO teacher_sheets (teacher_account_id, class_name, sheet_id)
-                SELECT id, 'Default class', sheet_id FROM accounts
-                WHERE role = 'teacher' AND sheet_id IS NOT NULL AND TRIM(sheet_id) != ''""")
+        legacy_sheets = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'teacher_sheets'"
+        ).fetchone()
+        if legacy_sheets:
+            old_classes = db.execute(
+                "SELECT teacher_account_id, class_name FROM teacher_sheets"
+            ).fetchall()
+            for teacher_id, class_name in old_classes:
+                db.execute(
+                    "INSERT OR IGNORE INTO teacher_classes (teacher_account_id, class_name) VALUES (?, ?)",
+                    (teacher_id, class_name),
+                )
+            db.execute("DROP TABLE teacher_sheets")
+        class_ids = db.execute("SELECT id FROM teacher_classes").fetchall()
+        for (class_id,) in class_ids:
+            db.execute(f"""CREATE TABLE IF NOT EXISTS attendance_class_{int(class_id)} (
+                session_label TEXT NOT NULL,
+                student_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('Present', 'Absent')),
+                PRIMARY KEY (session_label, student_id)
+            )""")
 
 
 init_accounts()
@@ -156,14 +168,14 @@ def login():
         return jsonify(error="Choose student or teacher sign in"), 400
     with account_db() as db:
         account = db.execute(
-            "SELECT role, account_id, email, password_hash, department, sheet_id FROM accounts WHERE email = ? AND role = ?",
+            "SELECT role, account_id, email, password_hash, department FROM accounts WHERE email = ? AND role = ?",
             (email, role),
         ).fetchone()
     if not account or not check_password_hash(account[3], password) or (role == "teacher" and account[1] != account_id):
         return jsonify(error="Email, ID, or password is incorrect"), 401
     session.clear()
-    session.update(role=account[0], account_id=account[1], email=account[2], department=account[4], sheet_id=account[5])
-    return jsonify(ok=True, role=account[0], account_id=account[1], department=account[4], sheet_id=account[5])
+    session.update(role=account[0], account_id=account[1], email=account[2], department=account[4])
+    return jsonify(ok=True, role=account[0], account_id=account[1], department=account[4])
 
 
 @app.get("/api/me")
@@ -173,43 +185,116 @@ def me():
     return jsonify(account={key: session.get(key) for key in ("role", "account_id", "email", "department")})
 
 
-@app.get("/api/teacher/sheets")
+@app.get("/api/teacher/classes")
 @require_role("teacher")
-def teacher_sheets():
+def teacher_classes():
     with account_db() as db:
-        rows = db.execute("""SELECT ts.id, ts.class_name, ts.sheet_id
-            FROM teacher_sheets ts JOIN accounts a ON a.id = ts.teacher_account_id
-            WHERE a.role = 'teacher' AND a.account_id = ? ORDER BY ts.class_name""",
+        rows = db.execute("""SELECT tc.id, tc.class_name
+            FROM teacher_classes tc JOIN accounts a ON a.id = tc.teacher_account_id
+            WHERE a.role = 'teacher' AND a.account_id = ? ORDER BY tc.class_name""",
             (session["account_id"],)).fetchall()
-    return jsonify(sheets=[{"id": row[0], "class_name": row[1], "sheet_id": row[2]} for row in rows])
+    return jsonify(classes=[{"id": row[0], "class_name": row[1]} for row in rows])
 
 
-@app.post("/api/teacher/sheets")
+def owned_teacher_class(db, class_id):
+    return db.execute("""SELECT tc.id, tc.class_name FROM teacher_classes tc
+        JOIN accounts a ON a.id = tc.teacher_account_id
+        WHERE tc.id = ? AND a.role = 'teacher' AND a.account_id = ?""",
+        (class_id, session["account_id"])).fetchone()
+
+
+@app.get("/api/teacher/classes/<int:class_id>/attendance")
 @require_role("teacher")
-def save_teacher_sheet():
+def teacher_class_attendance(class_id):
+    with account_db() as db:
+        klass = owned_teacher_class(db, class_id)
+        if not klass:
+            return jsonify(error="Class not found"), 404
+        records = db.execute(
+            f"SELECT session_label, student_id, status FROM attendance_class_{int(class_id)} "
+            "ORDER BY session_label, student_id"
+        ).fetchall()
+    return jsonify(class_name=klass[1], attendance=[
+        {"session_label": row[0], "student_id": row[1], "status": row[2]} for row in records
+    ])
+
+
+@app.get("/api/teacher/classes/<int:class_id>/export.xlsx")
+@require_role("teacher")
+def export_teacher_class_attendance(class_id):
+    with account_db() as db:
+        klass = owned_teacher_class(db, class_id)
+        if not klass:
+            return jsonify(error="Class not found"), 404
+        records = db.execute(
+            f"SELECT session_label, student_id, status FROM attendance_class_{int(class_id)} "
+            "ORDER BY session_label, student_id"
+        ).fetchall()
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Attendance"
+    worksheet.append(["Session", "Student ID", "Status"])
+    for record in records:
+        worksheet.append([excel_cell(value) for value in record])
+    worksheet.freeze_panes = "A2"
+    worksheet.auto_filter.ref = worksheet.dimensions
+    worksheet.column_dimensions["A"].width = 24
+    worksheet.column_dimensions["B"].width = 24
+    worksheet.column_dimensions["C"].width = 16
+
+    output = io.BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    filename = secure_filename(klass[1]) or "class"
+    return send_file(output, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True, download_name=f"{filename}-attendance.xlsx")
+
+
+def excel_cell(value):
+    text = str(value)
+    return f"'{text}" if text.startswith(("=", "+", "-", "@")) else text
+
+
+@app.post("/api/teacher/classes")
+@require_role("teacher")
+def create_teacher_classes():
     data = request.get_json(silent=True) or {}
-    class_name = (data.get("class_name") or "").strip()
-    sheet_id = (data.get("sheet_id") or "").strip()
-    if not class_name or len(class_name) > 100 or not sheet_id or len(sheet_id) > 200:
-        return jsonify(error="Enter a class name and Google Sheets ID"), 400
+    names = data.get("class_names")
+    if not isinstance(names, list):
+        names = [data.get("class_name", "")]
+    class_names = list(dict.fromkeys(name.strip() for name in names if isinstance(name, str) and name.strip()))
+    if not class_names or len(class_names) > 30 or any(len(name) > 100 for name in class_names):
+        return jsonify(error="Enter up to 30 class names, each no longer than 100 characters"), 400
     with account_db() as db:
-        db.execute("""INSERT INTO teacher_sheets (teacher_account_id, class_name, sheet_id)
-            SELECT id, ?, ? FROM accounts WHERE role = 'teacher' AND account_id = ?
-            ON CONFLICT (teacher_account_id, class_name) DO UPDATE SET sheet_id = excluded.sheet_id""",
-            (class_name, sheet_id, session["account_id"]))
-        row = db.execute("""SELECT ts.id FROM teacher_sheets ts JOIN accounts a ON a.id = ts.teacher_account_id
-            WHERE a.role = 'teacher' AND a.account_id = ? AND ts.class_name = ?""",
-            (session["account_id"], class_name)).fetchone()
-    return jsonify(ok=True, id=row[0], class_name=class_name, sheet_id=sheet_id)
+        teacher = db.execute(
+            "SELECT id FROM accounts WHERE role = 'teacher' AND account_id = ?",
+            (session["account_id"],),
+        ).fetchone()
+        for class_name in class_names:
+            db.execute(
+                "INSERT OR IGNORE INTO teacher_classes (teacher_account_id, class_name) VALUES (?, ?)",
+                (teacher[0], class_name),
+            )
+        class_ids = db.execute("SELECT id FROM teacher_classes WHERE teacher_account_id = ?", (teacher[0],)).fetchall()
+        for (class_id,) in class_ids:
+            db.execute(f"""CREATE TABLE IF NOT EXISTS attendance_class_{int(class_id)} (
+                session_label TEXT NOT NULL,
+                student_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('Present', 'Absent')),
+                PRIMARY KEY (session_label, student_id)
+            )""")
+    return jsonify(ok=True, created=len(class_names))
 
 
-@app.delete("/api/teacher/sheets/<int:sheet_row_id>")
+@app.delete("/api/teacher/classes/<int:class_id>")
 @require_role("teacher")
-def remove_teacher_sheet(sheet_row_id):
+def remove_teacher_class(class_id):
     with account_db() as db:
-        db.execute("""DELETE FROM teacher_sheets WHERE id = ? AND teacher_account_id =
-            (SELECT id FROM accounts WHERE role = 'teacher' AND account_id = ?)""",
-            (sheet_row_id, session["account_id"]))
+        row = owned_teacher_class(db, class_id)
+        if row:
+            db.execute(f"DROP TABLE IF EXISTS attendance_class_{int(class_id)}")
+            db.execute("DELETE FROM teacher_classes WHERE id = ?", (class_id,))
     return jsonify(ok=True)
 
 
@@ -222,12 +307,20 @@ def logout():
 @app.get("/api/student/attendance")
 @require_role("student")
 def student_attendance():
+    attendance = []
     with account_db() as db:
-        sources = db.execute("""SELECT ts.class_name, ts.sheet_id, a.account_id
-            FROM teacher_sheets ts JOIN accounts a ON a.id = ts.teacher_account_id
-            WHERE a.role = 'teacher' ORDER BY a.account_id, ts.class_name""").fetchall()
-    configured = [{"class_name": row[0], "sheet_id": row[1], "teacher_id": row[2]} for row in sources]
-    return jsonify(attendance=sheets.student_attendance(session["account_id"], configured))
+        classes = db.execute("""SELECT tc.id, tc.class_name, a.account_id
+            FROM teacher_classes tc JOIN accounts a ON a.id = tc.teacher_account_id
+            WHERE a.role = 'teacher' ORDER BY a.account_id, tc.class_name""").fetchall()
+        for class_id, class_name, teacher_id in classes:
+            rows = db.execute(
+                f"SELECT session_label, status FROM attendance_class_{int(class_id)} WHERE student_id = ? ORDER BY session_label",
+                (session["account_id"],),
+            ).fetchall()
+            attendance.extend({
+                "date": row[0], "status": row[1], "class_name": class_name, "teacher_id": teacher_id,
+            } for row in rows)
+    return jsonify(attendance=attendance)
 
 
 @app.get("/api/students")
@@ -278,7 +371,7 @@ def recognize():
     b64 = base64.b64encode(cv2.imencode(".jpg", vis)[1]).decode()
     present = {m[0] for m in matches.values()}
     return jsonify(image="data:image/jpeg;base64," + b64, faces=len(faces), metadata=meta,
-                   column=meta["taken_at"],
+                   session_label=meta["taken_at"],
                    students=[{"name": n, "present": n in present} for n in db])
 
 
@@ -286,22 +379,31 @@ def recognize():
 @require_role("teacher")
 def save():
     d = request.get_json(force=True)
-    column, att = (d.get("column") or "").strip(), d.get("attendance") or {}
-    if not column or not att:
-        return jsonify(error="Missing column label or attendance"), 400
+    session_label, attendance = (d.get("session_label") or "").strip(), d.get("attendance")
+    if not session_label or not isinstance(attendance, dict) or not attendance:
+        return jsonify(error="Missing session label or attendance"), 400
+    if any(not isinstance(student_id, str) or not isinstance(present, bool)
+           for student_id, present in attendance.items()):
+        return jsonify(error="Attendance must map student IDs to present/absent values"), 400
     try:
-        sheet_row_id = int(d.get("sheet_target"))
+        class_id = int(d.get("class_id"))
     except (TypeError, ValueError):
-        return jsonify(error="Choose a class sheet before saving attendance"), 400
+        return jsonify(error="Choose a class before saving attendance"), 400
     with account_db() as db:
-        row = db.execute("""SELECT ts.sheet_id FROM teacher_sheets ts
-            JOIN accounts a ON a.id = ts.teacher_account_id
-            WHERE ts.id = ? AND a.role = 'teacher' AND a.account_id = ?""",
-            (sheet_row_id, session["account_id"])).fetchone()
-    if not row:
-        return jsonify(error="That class sheet is not configured for your teacher account"), 400
-    sheet_id = row[0]
-    return jsonify(ok=True, url=sheets.mark(column, att, sheet_id=sheet_id))
+        row = db.execute("""SELECT tc.id FROM teacher_classes tc
+            JOIN accounts a ON a.id = tc.teacher_account_id
+            WHERE tc.id = ? AND a.role = 'teacher' AND a.account_id = ?""",
+            (class_id, session["account_id"])).fetchone()
+        if not row:
+            return jsonify(error="That class is not configured for your teacher account"), 400
+        table_name = f"attendance_class_{class_id}"
+        db.executemany(
+            f"""INSERT INTO {table_name} (session_label, student_id, status) VALUES (?, ?, ?)
+                ON CONFLICT (session_label, student_id) DO UPDATE SET status = excluded.status""",
+            [(session_label, student_id, "Present" if present else "Absent")
+             for student_id, present in attendance.items()],
+        )
+    return jsonify(ok=True)
 
 
 if __name__ == "__main__":
